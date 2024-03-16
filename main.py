@@ -1,30 +1,37 @@
-from transformers import CLIPModel, AutoTokenizer
-from torch.utils.data import DataLoader
 from torch.optim import AdamW
-from torch.cuda.amp.grad_scaler import GradScaler
-from third_party.open_clip.scheduler import cosine_lr
-from params import parse_args
+from torch.utils.data import DataLoader
+from torch.cuda.amp import GradScaler
+from transformers import AutoTokenizer
 
-from preprocess import preprocess
-from visinv import VisualInversion
+from custom_clip import CLIPModel
 from dataset import FashionIQ
+from params import parse_args
+from preprocess import preprocess
+from third_party.open_clip.scheduler import cosine_lr
+from visinv import VisualInversion, MultiHeadCrossAttention
 from trainer import train
+import logging
+from datetime import datetime
+import os
 
 
 def main():
     # parse args
     args = parse_args()
     # load CLIP model & CLIP tokenizer
-    clip_model = CLIPModel.from_pretrained("../clip-vit-large-patch14")
-    clip_tokenizer = AutoTokenizer.from_pretrained("../clip-vit-large-patch14")
+    clip_model = CLIPModel.from_pretrained("clip-vit-large-patch14")
+    clip_tokenizer = AutoTokenizer.from_pretrained("clip-vit-large-patch14")
     # create feature mapping model
     fm_model = VisualInversion(embed_dim=768, middle_dim=768, output_dim=768)
+    visinv_attn = MultiHeadCrossAttention(src_dim=768, tgt_dim=1024, num_heads=8)
     if args.gpu is not None:
         clip_model.cuda(args.gpu)
         fm_model.cuda(args.gpu)
+        visinv_attn.cuda(args.gpu)
     # create dataset
     dataset = FashionIQ(
         cloth=args.source_data,
+        split='train',
         transforms=preprocess(224, True),
         root="data",
         is_return_target_path=True
@@ -57,8 +64,25 @@ def main():
     scaler = GradScaler() if args.precision == 'amp' else None
     total_steps = len(dataloader) * args.epochs
     scheduler = cosine_lr(optimizer, args.lr, args.warmup, total_steps)     # todo explore the effect of warmup steps
+    # info preparation
+    current_time = datetime.now().strftime("%Y%m%d-%H-%M-%S")
+    os.makedirs(os.path.join('saved', f'{current_time}_{args.source_data}'))
     # run training script
-    train(clip_model, clip_tokenizer, fm_model, dataloader, args.epochs, optimizer, scaler, scheduler, args)
+    for epoch in range(args.epochs):
+        epoch_time, epoch_loss = train(
+            save_file=os.path.join(f'saved/{current_time}_{args.source_data}', f'epoch{epoch}.pt'),
+            clip_model=clip_model,
+            clip_tokenizer=clip_tokenizer,
+            fm_model=fm_model,
+            visinv_attn=visinv_attn,
+            dataloader=dataloader,
+            epoch=epoch,
+            optimizer=optimizer,
+            scaler=scaler,
+            scheduler=scheduler,
+            args=args
+        )
+        print(f"Epoch {epoch}, time: {epoch_time}, loss: {epoch_loss}")
 
 
 # Press the green button in the gutter to run the script.

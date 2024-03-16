@@ -36,6 +36,7 @@ from transformers.utils import (
 )
 from transformers.models.clip.configuration_clip import CLIPConfig, CLIPTextConfig, CLIPVisionConfig
 
+from visinv import MultiHeadCrossAttention
 
 logger = logging.get_logger(__name__)
 
@@ -655,6 +656,62 @@ class CLIPEncoder(nn.Module):
             last_hidden_state=hidden_states, hidden_states=encoder_states, attentions=all_attentions
         )
 
+    def visual_inversion(
+            self,
+            visinv_attn: torch.nn.Module,
+            inputs_embeds: torch.FloatTensor,
+            text_embeds: torch.FloatTensor,
+            attention_mask: Optional[torch.Tensor] = None,
+            causal_attention_mask: Optional[torch.Tensor] = None,
+            output_attentions: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            return_dict: Optional[bool] = None,
+    ):
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        encoder_states = () if output_hidden_states else None
+        all_attentions = () if output_attentions else None
+
+        hidden_states = inputs_embeds
+        for idx, encoder_layer in enumerate(self.layers):
+            if output_hidden_states:
+                encoder_states = encoder_states + (hidden_states,)
+            if self.gradient_checkpointing and self.training:
+                layer_outputs = self._gradient_checkpointing_func(
+                    encoder_layer.__call__,
+                    hidden_states,
+                    attention_mask,
+                    causal_attention_mask,
+                    output_attentions,
+                )
+            else:
+                layer_outputs = encoder_layer(
+                    hidden_states,
+                    attention_mask,
+                    causal_attention_mask,
+                    output_attentions=output_attentions,
+                )
+
+            hidden_states = layer_outputs[0]
+
+            if output_attentions:
+                all_attentions = all_attentions + (layer_outputs[1],)
+
+        hidden_states = visinv_attn(text_embeds, hidden_states)
+
+        if output_hidden_states:
+            encoder_states = encoder_states + (hidden_states,)
+
+        if not return_dict:
+            return tuple(v for v in [hidden_states, encoder_states, all_attentions] if v is not None)
+        return BaseModelOutput(
+            last_hidden_state=hidden_states, hidden_states=encoder_states, attentions=all_attentions
+        )
+
 
 class CLIPTextTransformer(nn.Module):
     def __init__(self, config: CLIPTextConfig):
@@ -869,6 +926,51 @@ class CLIPVisionTransformer(nn.Module):
             attentions=encoder_outputs.attentions,
         )
 
+    def visual_inversion(
+            self,
+            visinv_attn: torch.nn.Module,
+            pixel_values: Optional[torch.FloatTensor] = None,
+            text_embedding: Optional[torch.FloatTensor] = None,
+            output_attentions: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            return_dict: Optional[bool] = None,
+    ):
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        if pixel_values is None:
+            raise ValueError("You have to specify pixel_values")
+
+        hidden_states = self.embeddings(pixel_values)
+        hidden_states = self.pre_layrnorm(hidden_states)
+
+        encoder_outputs = self.encoder.visual_inversion(
+            visinv_attn=visinv_attn,
+            inputs_embeds=hidden_states,
+            text_embeds=text_embedding,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict
+        )
+
+        last_hidden_state = encoder_outputs[0]
+        pooled_output = last_hidden_state[:, 0, :]
+        pooled_output = self.post_layernorm(pooled_output)
+
+        if not return_dict:
+            return (last_hidden_state, pooled_output) + encoder_outputs[1:]
+
+        return BaseModelOutputWithPooling(
+            last_hidden_state=last_hidden_state,
+            pooler_output=pooled_output,
+            hidden_states=encoder_outputs.hidden_states,
+            attentions=encoder_outputs.attentions,
+        )
+
+
 
 @add_start_docstrings(
     """The vision model from CLIP without any head or projection on top.""",
@@ -965,6 +1067,37 @@ class CLIPModel(CLIPPreTrainedModel):
 
         # Initialize weights and apply final processing
         self.post_init()
+
+    def get_composed_features(
+            self,
+            visinv_attn: torch.nn.Module,
+            text_feature: Optional[torch.Tensor] = None,
+            pixel_values: Optional[torch.Tensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.Tensor] = None,
+            output_attentions: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            return_dict: Optional[bool] = None,
+    ):
+        # Use CLIP model's config for some fields (if specified) instead of those of vision & text components.
+        output_attentions = self.config.output_attentions
+        output_hidden_states = self.config.output_hidden_states
+        return_dict = self.config.use_return_dict
+
+        vision_outputs = self.vision_model.visual_inversion(
+            visinv_attn=visinv_attn,
+            pixel_values=pixel_values,
+            text_embedding=text_feature,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        pooled_output = vision_outputs[1]  # pooled_output
+        image_features = self.visual_projection(pooled_output)
+
+        return image_features
+
 
     @add_start_docstrings_to_model_forward(CLIP_TEXT_INPUTS_DOCSTRING)
     def get_text_features(

@@ -12,7 +12,7 @@ from third_party.open_clip.clip import tokenize
 # caption split ./json/cap.{cloth_type}.val.json, cloth_type in [toptee, shirt, dress]
 # image split ./image_splits/split.{cloth_type}.val.json, cloth_type in [toptee, shirt, dress]
 class FashionIQ(Dataset):
-    def __init__(self, cloth, transforms, vis_mode=False, mode='caps', is_return_target_path=False, root='./data'):
+    def __init__(self, cloth, transforms, vis_mode=False, mode='caps', is_return_target_path=False, root='./data', split='train'):
         root_iq = os.path.join(root, 'fashion-iq')
         self.root_img = os.path.join(root_iq, 'images')
         self.vis_mode = vis_mode
@@ -21,10 +21,10 @@ class FashionIQ(Dataset):
         self.transforms = transforms
         if mode == 'imgs':
             self.json_file = os.path.join(root_iq, 'image_splits',
-                                          'split.{}.val.json'.format(cloth))
+                                          f'split.{cloth}.{split}.json')
         else:
             self.json_file = os.path.join(root_iq, 'json',
-                                          'cap.{}.val.json'.format(cloth))
+                                          f'cap.{cloth}.{split}.json')
         logging.debug(f'Loading json data from {self.json_file}.')
 
         self.ref_imgs = []
