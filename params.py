@@ -41,17 +41,20 @@ def parse_args():
     parser.add_argument(
         "--precision",
         choices=["amp", "fp16", "fp32"],
-        default="amp",
+        default="fp32",
         help="Floating point precision."
     )
     parser.add_argument(
-        "--workers", type=int, default=1, help="Number of workers per GPU."
+        "--workers", type=int, default=0, help="Number of workers per GPU."
     )
     parser.add_argument(
-        "--batch-size", type=int, default=64, help="Batch size per GPU."
+        "--batch-size", type=int, default=512, help="Batch size per GPU."
     )
     parser.add_argument(
         "--epochs", type=int, default=32, help="Number of epochs to train for."
+    )
+    parser.add_argument(
+        "--temperature", type=float, default=0.1, help="temperature of infoNCE loss."
     )
     parser.add_argument(
         "--warmup", type=int, default=0, help="Number of steps to warmup for."
