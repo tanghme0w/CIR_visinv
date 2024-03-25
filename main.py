@@ -23,7 +23,9 @@ def main():
     clip_tokenizer = AutoTokenizer.from_pretrained("clip-vit-large-patch14")
     # create feature mapping model
     fm_model = VisualInversion(embed_dim=768, middle_dim=768, output_dim=768)
-    visinv_attn = MultiHeadCrossAttention(src_dim=768, tgt_dim=1024, num_heads=8)
+    visinv_attn = MultiHeadCrossAttention(src_dim=1024, tgt_dim=768, num_heads=8)
+    for param in fm_model.parameters():
+        param.data.fill_(0.)
     if args.gpu is not None:
         clip_model.cuda(args.gpu)
         fm_model.cuda(args.gpu)

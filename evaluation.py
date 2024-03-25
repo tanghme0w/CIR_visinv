@@ -49,9 +49,9 @@ def preprocess(n_px: int, is_train: bool):
 def load_model(args):
     clip_model = CLIPModel.from_pretrained('clip-vit-large-patch14')
     tokenizer = CLIPTokenizer.from_pretrained('clip-vit-large-patch14')
-    checkpoint = torch.load('saved/20240314-13-29-00_dress/epoch31.pt')
+    checkpoint = torch.load(args.ckpt)
     fm_model = VisualInversion(embed_dim=768, middle_dim=768, output_dim=768)
-    visinv_attn = MultiHeadCrossAttention(src_dim=768, tgt_dim=1024, num_heads=8)
+    visinv_attn = MultiHeadCrossAttention(src_dim=1024, tgt_dim=768, num_heads=8)
     fm_model.load_state_dict(checkpoint['fm_state_dict'])
     visinv_attn.load_state_dict(checkpoint['attn_state_dict'])
     # move models to GPU

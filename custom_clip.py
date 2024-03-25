@@ -701,7 +701,7 @@ class CLIPEncoder(nn.Module):
             if output_attentions:
                 all_attentions = all_attentions + (layer_outputs[1],)
 
-        hidden_states = visinv_attn(text_embeds, hidden_states)
+        hidden_states = visinv_attn(hidden_states, text_embeds) + hidden_states
 
         if output_hidden_states:
             encoder_states = encoder_states + (hidden_states,)

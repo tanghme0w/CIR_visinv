@@ -31,7 +31,7 @@ class MultiHeadCrossAttention(Module):
         self.v_proj = Linear(tgt_dim, tgt_dim)
         self.attention_dropout = Dropout(0.1)
         self.softmax = Softmax(dim=-1)
-        self.out_proj = Linear(tgt_dim, tgt_dim)
+        self.out_proj = Linear(tgt_dim, src_dim)
 
     def _shard(self, tensor, bs):
         return tensor.view(bs, -1, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -39,23 +39,23 @@ class MultiHeadCrossAttention(Module):
     def forward(self, query, target):
         # using the output embedding of text encoder as query, shape is (batch_size, src_dim)
         # target shape is (batch_size, seq_len, tgt_dim)
-        batch_size, seq_len, tgt_dim = target.shape
+        batch_size, seq_len, tgt_dim = query.shape
 
         # Project and shard the queries, keys, and values
-        q = self._shard(self.q_proj(query), batch_size)
-        k = self._shard(self.k_proj(target), batch_size)
-        v = self._shard(self.v_proj(target), batch_size)
+        q = self._shard(self.q_proj(query), batch_size) # q: [bs, num_heads, seq_len, head_dim]
+        k = self._shard(self.k_proj(target), batch_size)    # k: [bs, 1, num_heads, head_dim]
+        v = self._shard(self.v_proj(target), batch_size)    # v: [bs, 1, num_heads, head_dim]
 
         # Calculate the attention scores
-        q = q.expand(-1, -1, seq_len, -1).contiguous().view(batch_size * self.num_heads, -1, self.head_dim)     # [bs*num_heads, seq_len, head_dim]
-        k = k.view(batch_size * self.num_heads, -1, self.head_dim).transpose(-2, -1)    # [bs*num_heads, head_dim, seq_len]
-        scores = bmm(q, k) / (self.head_dim ** 0.5)      # [bs*num_heads, seq_len, seq_len]
+        q = q.view(batch_size, self.num_heads * seq_len, self.head_dim)   # [bs, num_heads * seq_len, head_dim]
+        k = k.view(batch_size, self.num_heads, self.head_dim).transpose(1, 2)    # [bs, head_dim, num_heads]
+        scores = bmm(q, k) / (self.head_dim ** 0.5)      # [bs, num_heads * seq_len, num_heads]
         scores = self.softmax(scores)
         scores = self.attention_dropout(scores)
 
         # Apply the attention to the values
-        v = v.view(batch_size * self.num_heads, -1, self.head_dim)  # [bs*num_heads, seq_len, head_dim]
-        context = bmm(scores, v)    # [bs*num_heads, seq_len, head_dim]
+        v = v.view(batch_size, self.num_heads, self.head_dim)  # [bs, num_heads, head_dim]
+        context = bmm(scores, v)    # [bs, num_heads * seq_len, head_dim]
         context = context.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)  # [bs, seq_len, tgt_dim] todo is this correct?
 
         # Project the context to the original query shape

@@ -23,6 +23,10 @@ def parse_args():
         default=0
     )
     parser.add_argument(
+        "--ckpt",
+        help='path to checkpoint file'
+    )
+    parser.add_argument(
         "--model",
         choices=["RN50", "RN101", "RN50x4", "RN50x64", "RN50x16", "ViT-B/16", "ViT-B/32", "ViT-L/14", "ViT-H-14",
                  "RN50_flat", "RN50_t1", "RN50_t2", "RN50_t3", "RN50_t4", "RN50_t5", "RN50_t6",
