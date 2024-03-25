@@ -26,6 +26,8 @@ def main():
     visinv_attn = MultiHeadCrossAttention(src_dim=1024, tgt_dim=768, num_heads=8)
     for param in fm_model.parameters():
         param.data.fill_(0.)
+    for param in visinv_attn.parameters():
+        param.data.fill_(0.)
     if args.gpu is not None:
         clip_model.cuda(args.gpu)
         fm_model.cuda(args.gpu)
