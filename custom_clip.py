@@ -659,6 +659,7 @@ class CLIPEncoder(nn.Module):
     def visual_inversion(
             self,
             visinv_attn: torch.nn.Module,
+            ln: torch.nn.LayerNorm,
             inputs_embeds: torch.FloatTensor,
             text_embeds: torch.FloatTensor,
             attention_mask: Optional[torch.Tensor] = None,
@@ -695,13 +696,13 @@ class CLIPEncoder(nn.Module):
                     causal_attention_mask,
                     output_attentions=output_attentions,
                 )
-
             hidden_states = layer_outputs[0]
+            if idx == 22:
+                hidden_states = visinv_attn(hidden_states, text_embeds) + hidden_states
+                hidden_states = ln(hidden_states)
 
             if output_attentions:
                 all_attentions = all_attentions + (layer_outputs[1],)
-
-        hidden_states = visinv_attn(hidden_states, text_embeds)
 
         if output_hidden_states:
             encoder_states = encoder_states + (hidden_states,)
@@ -929,6 +930,7 @@ class CLIPVisionTransformer(nn.Module):
     def visual_inversion(
             self,
             visinv_attn: torch.nn.Module,
+            ln: torch.nn.LayerNorm,
             pixel_values: Optional[torch.FloatTensor] = None,
             text_embedding: Optional[torch.FloatTensor] = None,
             output_attentions: Optional[bool] = None,
@@ -949,6 +951,7 @@ class CLIPVisionTransformer(nn.Module):
 
         encoder_outputs = self.encoder.visual_inversion(
             visinv_attn=visinv_attn,
+            ln=ln,
             inputs_embeds=hidden_states,
             text_embeds=text_embedding,
             output_attentions=output_attentions,
@@ -1071,6 +1074,7 @@ class CLIPModel(CLIPPreTrainedModel):
     def get_composed_features(
             self,
             visinv_attn: torch.nn.Module,
+            ln: torch.nn.LayerNorm,
             text_feature: Optional[torch.Tensor] = None,
             pixel_values: Optional[torch.Tensor] = None,
             attention_mask: Optional[torch.Tensor] = None,
@@ -1086,6 +1090,7 @@ class CLIPModel(CLIPPreTrainedModel):
 
         vision_outputs = self.vision_model.visual_inversion(
             visinv_attn=visinv_attn,
+            ln = ln,
             pixel_values=pixel_values,
             text_embedding=text_feature,
             output_attentions=output_attentions,
@@ -1097,7 +1102,32 @@ class CLIPModel(CLIPPreTrainedModel):
         image_features = self.visual_projection(pooled_output)
 
         return image_features
+    
+    def get_text_final_hidden(
+        self,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ):
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+        text_outputs = self.text_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        return text_outputs.last_hidden_state
 
     @add_start_docstrings_to_model_forward(CLIP_TEXT_INPUTS_DOCSTRING)
     def get_text_features(

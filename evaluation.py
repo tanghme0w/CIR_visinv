@@ -6,11 +6,12 @@ from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normal
 from tqdm import tqdm
 import numpy as np
 
-from visinv import VisualInversion, MultiHeadCrossAttention
+from visinv import VisualInversion, CrossAttention
 from params import parse_args
 from dataset import FashionIQ
 from custom_clip import CLIPModel
 from transformers.models.clip import CLIPTokenizer
+import os
 
 
 def get_metrics_fashion(image_features, ref_features, target_names, answer_names):
@@ -49,21 +50,14 @@ def preprocess(n_px: int, is_train: bool):
 def load_model(args):
     clip_model = CLIPModel.from_pretrained('clip-vit-large-patch14')
     tokenizer = CLIPTokenizer.from_pretrained('clip-vit-large-patch14')
-    checkpoint = torch.load(args.ckpt)
-    fm_model = VisualInversion(embed_dim=768, middle_dim=768, output_dim=768)
-    visinv_attn = MultiHeadCrossAttention(src_dim=1024, tgt_dim=768, num_heads=8)
-    fm_model.load_state_dict(checkpoint['fm_state_dict'])
-    visinv_attn.load_state_dict(checkpoint['attn_state_dict'])
     # move models to GPU
     if args.gpu is not None:
         clip_model.cuda(args.gpu)
-        fm_model.cuda(args.gpu)
-        visinv_attn.cuda(args.gpu)
-    return preprocess(224, False), clip_model, tokenizer, fm_model, visinv_attn
+    return preprocess(224, False), clip_model, tokenizer
 
 
 def fashion_eval(args, root_project):
-    preprocess_val, clip_model, tokenizer, fm_model, visinv_attn = load_model(args)
+    preprocess_val, clip_model, tokenizer = load_model(args)
     assert args.source_data in ['dress', 'shirt', 'toptee']
     source_dataset = FashionIQ(cloth=args.source_data,
                                split='val',
@@ -93,8 +87,6 @@ def fashion_eval(args, root_project):
     evaluate_fashion(
         clip_model=clip_model,
         tokenizer=tokenizer,
-        fm_model=fm_model,
-        visinv_attn=visinv_attn,
         source_loader=source_dataloader,
         target_loader=target_dataloader,
         args=args
@@ -122,8 +114,6 @@ def tensor2img(tensor):
 def evaluate_fashion(
         clip_model,
         tokenizer,
-        fm_model,
-        visinv_attn,
         source_loader,
         target_loader,
         args
@@ -132,45 +122,62 @@ def evaluate_fashion(
     all_image_features = []
     all_target_paths = []
     all_answer_paths = []
-    # get all image features
-    with torch.no_grad():
-        for batch in tqdm(target_loader, desc="Target Features:"):
-            target_images, target_paths = batch
-            target_images = target_images.cuda(0, non_blocking=True)
-            image_features = clip_model.get_image_features(target_images)
-            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-            all_image_features.append(image_features)
-            for path in target_paths:
-                all_target_paths.append(path)
-    # get composed features
-    with torch.no_grad():
-        for batch in tqdm(source_loader):
-            ref_images, target_images, target_caption, caption_only, answer_paths, ref_names, captions = batch
-            for path in answer_paths:
-                all_answer_paths.append(path)
-            text_tokens = tokenizer(captions, padding=True, return_tensors="pt")
-            if args.gpu is not None:
-                text_tokens = text_tokens.to(f"cuda:{args.gpu}")
-                ref_images = ref_images.to(f"cuda:{args.gpu}")
-            text_feature_raw = clip_model.get_text_features(**text_tokens)
-            text_feature_mapped = fm_model(text_feature_raw)
-            composed_feature = clip_model.get_composed_features(visinv_attn, text_feature_mapped, ref_images)
-            composed_feature = composed_feature / composed_feature.norm(dim=-1, keepdim=True)
-            all_composed_feat.append(composed_feature)
-    metric_func = partial(get_metrics_fashion,
-                          image_features=torch.cat(all_image_features),
-                          target_names=all_target_paths, answer_names=all_answer_paths)
-    feats = {
-        'composed': torch.cat(all_composed_feat)
-    }
-    for key, value in feats.items():
-        metrics = metric_func(ref_features=value)
-        print(
-            f"Eval {key} Feature"
-            + "\t".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
-        )
-    return metrics
-
+    if os.path.isdir(args.ckpt):
+        files = [os.path.join(args.ckpt, filename) for filename in os.listdir(args.ckpt)]
+        outpath = os.path.join(args.ckpt, "all_eval.txt")
+    else:
+        files = [args.ckpt]
+        outpath = os.path.join(os.path.dirname(args.ckpt), f"{os.path.basename(args.ckpt)}_eval.txt")
+    fm_model = VisualInversion(embed_dim=768, middle_dim=768, output_dim=768)
+    visinv_attn = CrossAttention(src_dim=1024, tgt_dim=768)
+    ln = torch.nn.LayerNorm(1024)
+    if args.gpu is not None:
+        fm_model.cuda(args.gpu)
+        visinv_attn.cuda(args.gpu)
+        ln.cuda(args.gpu)
+    for ckpt_file in files:
+        breakpoint()
+        checkpoint = torch.load(ckpt_file)
+        clip_model.load_state_dict(checkpoint['clip_state_dict'])
+        fm_model.load_state_dict(checkpoint['fm_state_dict'])
+        visinv_attn.load_state_dict(checkpoint['attn_state_dict'])
+        ln.load_state_dict(checkpoint['ln_state_dict'])
+        # get all image features
+        with torch.no_grad():
+            for batch in tqdm(target_loader, desc="Target Features:"):
+                target_images, target_paths = batch
+                target_images = target_images.cuda(args.gpu, non_blocking=True)
+                image_features = clip_model.get_image_features(target_images)
+                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+                all_image_features.append(image_features)
+                for path in target_paths:
+                    all_target_paths.append(path)
+        # get composed features
+        with torch.no_grad():
+            for batch in tqdm(source_loader):
+                ref_images, target_images, target_caption, caption_only, answer_paths, ref_names, captions = batch
+                for path in answer_paths:
+                    all_answer_paths.append(path)
+                text_tokens = tokenizer(captions, padding=True, return_tensors="pt")
+                if args.gpu is not None:
+                    text_tokens = text_tokens.to(f"cuda:{args.gpu}")
+                    ref_images = ref_images.to(f"cuda:{args.gpu}")
+                text_feature_raw = clip_model.get_text_final_hidden(**text_tokens)
+                text_feature_mapped = fm_model(text_feature_raw)
+                composed_feature = clip_model.get_composed_features(visinv_attn, ln, text_feature_mapped, ref_images)
+                composed_feature = composed_feature / composed_feature.norm(dim=-1, keepdim=True)
+                all_composed_feat.append(composed_feature)
+        metric_func = partial(get_metrics_fashion,
+                            image_features=torch.cat(all_image_features),
+                            target_names=all_target_paths, answer_names=all_answer_paths)
+        feats = {
+            'composed': torch.cat(all_composed_feat)
+        }
+        for key, value in feats.items():
+            metrics = metric_func(ref_features=value)
+            result = f"{os.path.basename(ckpt_file)}" + ":\t".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
+            open(outpath, "a").write(result + '\n')
+            print(result)
 
 if __name__ == '__main__':
     args = parse_args()

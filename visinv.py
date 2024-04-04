@@ -61,3 +61,24 @@ class MultiHeadCrossAttention(Module):
         # Project the context to the original query shape
         attention_output = self.out_proj(context)
         return attention_output     # [bs, seq_len, tgt_dim]
+
+
+class CrossAttention(Module):
+    def __init__(self, src_dim, tgt_dim):
+        # src_dim=1024, tgt_dim=768
+        super().__init__()
+        self.q_proj = Linear(src_dim, tgt_dim)
+        self.k_proj = Linear(tgt_dim, tgt_dim)
+        self.v_proj = Linear(tgt_dim, tgt_dim)
+        self.softmax = Softmax(dim = -1)
+        self.final_proj = Linear(tgt_dim, src_dim)
+    
+    def forward(self, query, target):
+        q = self.q_proj(query)                  # [bs, 257, 768]
+        k = self.k_proj(target).transpose(1, 2)  # [bs, 768, 77]
+        v = self.v_proj(target)                  # [bs, 77, 768]
+        scores = bmm(q, k)                      # [bs, 257, 77]
+        scores = self.softmax(scores)           # [bs, 257, 77]
+        context = bmm(scores, v)                # [bs, 257, 768]
+        attn_out = self.final_proj(context)     # [bs, 257, 1024]
+        return attn_out

@@ -1,3 +1,4 @@
+import torch
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler
@@ -8,7 +9,7 @@ from dataset import FashionIQ
 from params import parse_args
 from preprocess import preprocess
 from third_party.open_clip.scheduler import cosine_lr
-from visinv import VisualInversion, MultiHeadCrossAttention
+from visinv import VisualInversion, MultiHeadCrossAttention, CrossAttention
 from trainer import train
 import logging
 from datetime import datetime
@@ -23,11 +24,13 @@ def main():
     clip_tokenizer = AutoTokenizer.from_pretrained("clip-vit-large-patch14")
     # create feature mapping model
     fm_model = VisualInversion(embed_dim=768, middle_dim=768, output_dim=768)
-    visinv_attn = MultiHeadCrossAttention(src_dim=1024, tgt_dim=768, num_heads=8)
+    visinv_attn = CrossAttention(src_dim=1024, tgt_dim=768)
+    layer_norm = torch.nn.LayerNorm(1024)
     if args.gpu is not None:
         clip_model.cuda(args.gpu)
         fm_model.cuda(args.gpu)
         visinv_attn.cuda(args.gpu)
+        layer_norm.cuda(args.gpu)
     # create dataset
     dataset = FashionIQ(
         cloth=args.source_data,
@@ -65,25 +68,40 @@ def main():
     total_steps = len(dataloader) * args.epochs
     scheduler = cosine_lr(optimizer, args.lr, args.warmup, total_steps)     # todo explore the effect of warmup steps
     # info preparation
-    current_time = datetime.now().strftime("%Y%m%d-%H-%M-%S")
-    os.makedirs(os.path.join('saved', f'{current_time}_{args.source_data}'))
+    start_time = datetime.now().strftime("%Y%m%d-%H-%M-%S")
+    os.makedirs(os.path.join('saved', f'{start_time}_{args.source_data}'))
     # run training script
-    for epoch in range(args.epochs):
-        epoch_time, epoch_loss = train(
-            save_file=os.path.join(f'saved/{current_time}_{args.source_data}', f'epoch{epoch}.pt'),
-            clip_model=clip_model,
-            clip_tokenizer=clip_tokenizer,
-            fm_model=fm_model,
-            visinv_attn=visinv_attn,
-            dataloader=dataloader,
-            epoch=epoch,
-            optimizer=optimizer,
-            scaler=scaler,
-            scheduler=scheduler,
-            args=args
-        )
-        print(f"Epoch {epoch}, time: {epoch_time}, loss: {epoch_loss}")
-
+    best_epoch = None
+    best_epoch_loss = None
+    patience_count = 0
+    try:
+        for epoch in range(args.epochs):
+            epoch_time, epoch_loss = train(
+                save_file=os.path.join(f'saved/{start_time}_{args.source_data}', f'epoch{epoch}.pt'),
+                clip_model=clip_model,
+                clip_tokenizer=clip_tokenizer,
+                fm_model=fm_model,
+                visinv_attn=visinv_attn,
+                ln = layer_norm,
+                dataloader=dataloader,
+                epoch=epoch,
+                optimizer=optimizer,
+                scaler=scaler,
+                scheduler=scheduler,
+                args=args
+            )
+            if best_epoch_loss is None or epoch_loss < best_epoch_loss:
+                best_epoch_loss = best_epoch_loss
+                best_epoch = epoch
+            else:
+                patience_count += 1
+            print(f"Epoch {epoch}, time: {epoch_time}, loss: {epoch_loss}")
+            if patience_count >= 2:
+                    break
+    except Exception as e:
+        print(e)
+        os.rmdir(os.path.join('saved', f'{start_time}_{args.source_data}'))
+    print(f"best_epoch: {best_epoch}")
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
