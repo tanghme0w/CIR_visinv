@@ -1,17 +1,18 @@
+import os
 from functools import partial
+
+import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import DataLoader
-from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, RandomResizedCrop
 from tqdm import tqdm
-import numpy as np
-
-from visinv import VisualInversion, CrossAttention
-from params import parse_args
-from dataset import FashionIQ
-from custom_clip import CLIPModel
 from transformers.models.clip import CLIPTokenizer
-import os
+
+from custom_clip import CLIPModel
+from dataset import FashionIQ
+from params import parse_args
+from preprocess import preprocess
+from visinv import VisualInversion, CrossAttention
 
 
 def get_metrics_fashion(image_features, ref_features, target_names, answer_names):
@@ -26,25 +27,6 @@ def get_metrics_fashion(image_features, ref_features, target_names, answer_names
     for k in [1, 5, 10, 50, 100]:
         metrics[f"R@{k}"] = (torch.sum(labels[:, :k]) / len(labels)).item() * 100
     return metrics
-
-
-def preprocess(n_px: int, is_train: bool):
-    normalize = Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
-    if is_train:
-        return Compose([
-            RandomResizedCrop(n_px, scale=(0.9, 1.0), interpolation=Image.BICUBIC),
-            lambda image: image.convert('RGB'),
-            ToTensor(),
-            normalize,
-        ])
-    else:
-        return Compose([
-            Resize(n_px, interpolation=Image.BICUBIC),
-            CenterCrop(n_px),
-            lambda image: image.convert('RGB'),
-            ToTensor(),
-            normalize,
-        ])
 
 
 def load_model(args):
@@ -124,10 +106,10 @@ def evaluate_fashion(
     all_answer_paths = []
     if os.path.isdir(args.ckpt):
         files = [os.path.join(args.ckpt, filename) for filename in os.listdir(args.ckpt)]
-        outpath = os.path.join(args.ckpt, "all_eval.txt")
+        out_path = os.path.join(args.ckpt, "all_eval.txt")
     else:
         files = [args.ckpt]
-        outpath = os.path.join(os.path.dirname(args.ckpt), f"{os.path.basename(args.ckpt)}_eval.txt")
+        out_path = os.path.join(os.path.dirname(args.ckpt), f"{os.path.basename(args.ckpt)}_eval.txt")
     fm_model = VisualInversion(embed_dim=768, middle_dim=768, output_dim=768)
     visinv_attn = CrossAttention(src_dim=1024, tgt_dim=768)
     ln = torch.nn.LayerNorm(1024)
@@ -167,16 +149,17 @@ def evaluate_fashion(
                 composed_feature = composed_feature / composed_feature.norm(dim=-1, keepdim=True)
                 all_composed_feat.append(composed_feature)
         metric_func = partial(get_metrics_fashion,
-                            image_features=torch.cat(all_image_features),
-                            target_names=all_target_paths, answer_names=all_answer_paths)
+                              image_features=torch.cat(all_image_features),
+                              target_names=all_target_paths, answer_names=all_answer_paths)
         feats = {
             'composed': torch.cat(all_composed_feat)
         }
         for key, value in feats.items():
             metrics = metric_func(ref_features=value)
             result = f"{os.path.basename(ckpt_file)}" + ":\t".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
-            open(outpath, "a").write(result + '\n')
+            open(out_path, "a").write(result + '\n')
             print(result)
+
 
 if __name__ == '__main__':
     args = parse_args()

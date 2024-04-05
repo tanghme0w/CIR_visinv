@@ -9,9 +9,8 @@ from dataset import FashionIQ
 from params import parse_args
 from preprocess import preprocess
 from third_party.open_clip.scheduler import cosine_lr
-from visinv import VisualInversion, MultiHeadCrossAttention, CrossAttention
+from visinv import VisualInversion, CrossAttention
 from trainer import train
-import logging
 from datetime import datetime
 import os
 
@@ -45,8 +44,8 @@ def main():
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.workers,
-        pin_memory=True,    # todo what does this mean?
-        drop_last=False     # todo what does this mean?
+        pin_memory=True,  # todo what does this mean?
+        drop_last=False  # todo what does this mean?
     )
     # get optimizer, scaler, and scheduler
     exclude = lambda n: "bn" in n or "ln" in n or "bias" in n or 'logit_scale' in n
@@ -66,7 +65,7 @@ def main():
     )
     scaler = GradScaler() if args.precision == 'amp' else None
     total_steps = len(dataloader) * args.epochs
-    scheduler = cosine_lr(optimizer, args.lr, args.warmup, total_steps)     # todo explore the effect of warmup steps
+    scheduler = cosine_lr(optimizer, args.lr, args.warmup, total_steps)  # todo explore the effect of warmup steps
     # info preparation
     start_time = datetime.now().strftime("%Y%m%d-%H-%M-%S")
     os.makedirs(os.path.join('saved', f'{start_time}_{args.source_data}'))
@@ -82,7 +81,7 @@ def main():
                 clip_tokenizer=clip_tokenizer,
                 fm_model=fm_model,
                 visinv_attn=visinv_attn,
-                ln = layer_norm,
+                ln=layer_norm,
                 dataloader=dataloader,
                 epoch=epoch,
                 optimizer=optimizer,
@@ -97,11 +96,12 @@ def main():
                 patience_count += 1
             print(f"Epoch {epoch}, time: {epoch_time}, loss: {epoch_loss}")
             if patience_count >= 2:
-                    break
+                break
     except Exception as e:
         print(e)
         os.rmdir(os.path.join('saved', f'{start_time}_{args.source_data}'))
     print(f"best_epoch: {best_epoch}")
+
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
