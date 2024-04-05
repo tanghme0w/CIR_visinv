@@ -136,7 +136,6 @@ def evaluate_fashion(
         visinv_attn.cuda(args.gpu)
         ln.cuda(args.gpu)
     for ckpt_file in files:
-        breakpoint()
         checkpoint = torch.load(ckpt_file)
         clip_model.load_state_dict(checkpoint['clip_state_dict'])
         fm_model.load_state_dict(checkpoint['fm_state_dict'])
