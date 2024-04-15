@@ -3,6 +3,7 @@ from datetime import datetime
 import os
 
 import torch
+import torch.nn.functional as F
 from torch.cuda.amp import autocast
 from custom_clip import CLIPModel
 from transformers import CLIPTokenizer
@@ -13,9 +14,6 @@ from tqdm import tqdm
 def calculate_loss(
         clip_model: CLIPModel,
         clip_tokenizer: CLIPTokenizer,
-        fm_model: VisualInversion,
-        visinv_attn: CrossAttention,
-        ln: torch.nn.LayerNorm,
         loss_func: torch.nn.Module,
         ref_img,
         text,
@@ -26,9 +24,9 @@ def calculate_loss(
     tokenized_text = clip_tokenizer(text, padding=True, return_tensors="pt")
     if args.gpu is not None:
         tokenized_text.to(f"cuda:{args.gpu}")
-    text_feature = clip_model.get_text_final_hidden(**tokenized_text)
-    text_feature = fm_model(text_feature)
-    composed_feature = clip_model.get_composed_features(visinv_attn, ln, text_feature, ref_img)
+    text_feature = clip_model.get_text_features(**tokenized_text)
+    image_feature = clip_model.get_image_features(ref_img)
+    composed_feature = F.normalize(text_feature + image_feature, dim=-1)
     # get target embedding
     target_feature = clip_model.get_image_features(tgt_img)
     # calculate loss and return
@@ -55,14 +53,6 @@ def train(
         args
 ):
     clip_model.eval()
-    fm_model.train()
-    visinv_attn.train()
-    # freeze clip_model parameters
-    for param in clip_model.parameters():
-        param.requires_grad = False
-    for name, param in clip_model.named_parameters():
-        if ("vision_model.encoder.layers.23" in name) or ("vision_model.post_layernorm" in name):
-            param.requires_grad = True
     # get batches per epoch
     num_batches_per_epoch = len(dataloader)
     # track time
@@ -106,9 +96,6 @@ def train(
             total_loss = calculate_loss(
                 clip_model=clip_model,
                 clip_tokenizer=clip_tokenizer,
-                fm_model=fm_model,
-                visinv_attn=visinv_attn,
-                ln=ln,
                 loss_func=loss_func,
                 ref_img=ref_images,
                 text=captions,
@@ -124,10 +111,7 @@ def train(
     # save model
     checkpoint = {
         'clip_state_dict': clip_model.state_dict(),
-        'fm_state_dict': fm_model.state_dict(),
-        'attn_state_dict': visinv_attn.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        'ln_state_dict': ln.state_dict(),
         'epoch': epoch
     }
     torch.save(checkpoint, save_file)

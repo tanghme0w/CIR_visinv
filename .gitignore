@@ -1,0 +1,5 @@
+data/
+saved/
+.idea
+__pycache__/
+clip*/

@@ -50,6 +50,18 @@ def main():
     # get optimizer, scaler, and scheduler
     exclude = lambda n: "bn" in n or "ln" in n or "bias" in n or 'logit_scale' in n
     include = lambda n: not exclude(n)
+    # freeze parameters
+    for param in clip_model.parameters():
+        param.requires_grad = False
+    trainable_names = [
+        "vision_model",
+        "visual_projection",
+        "text_model",
+        "text_projection"
+    ]
+    for name, param in clip_model.named_parameters():
+        if any(trainable_name in name for trainable_name in trainable_names):
+            param.requires_grad = True
     named_parameters = list(fm_model.named_parameters())
     gain_or_bias_params = [p for n, p in named_parameters if exclude(n) and p.requires_grad]
     rest_params = [p for n, p in named_parameters if include(n) and p.requires_grad]
@@ -76,7 +88,7 @@ def main():
     try:
         for epoch in range(args.epochs):
             epoch_time, epoch_loss = train(
-                save_file=os.path.join(f'saved/{start_time}_{args.source_data}', f'epoch{epoch}.pt'),
+                save_file=os.path.join(f'saved/{start_time}_{args.source_data}', f'epoch{str(epoch).zfill(3)}.pt'),
                 clip_model=clip_model,
                 clip_tokenizer=clip_tokenizer,
                 fm_model=fm_model,
